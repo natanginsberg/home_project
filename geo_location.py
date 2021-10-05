@@ -66,6 +66,17 @@ def get_distance():
         return Response("Error: Unable to connect to our server at the moment", status=410)
 
 
+@app.route('/health')
+def get_health():
+    client = MongoClient('localhost', 27017)
+    if is_server_connected(client):
+        return Response(status=200)
+    else:
+        Response("Error: Unable to connect to our server at the moment", status=500)
+
+
+
+
 if __name__ == '__main__':
     app.debug = True
     app.run(host='0.0.0.0', port=8080)
