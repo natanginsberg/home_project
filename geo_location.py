@@ -70,7 +70,7 @@ def check_if_data_exists(client, locations):
 
 
 def get_distance_with_google_maps(source, destination):
-    url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=AIzaSyDGvN2RbPJ1c-13CGv3DDruF7MVx5wECNo" % (
+    url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=" % (
         source, destination)
     payload = {}
     headers = {}
