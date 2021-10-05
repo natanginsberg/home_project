@@ -13,8 +13,18 @@ NO_CONNECTION_ERROR = "Error: Unable to connect to our server at the moment"
 NO_SEARCHES_FOUND_ERROR = "Error: No searches found"
 INVALID_INPUT_ERROR = "Error: Cannot locate the locations requested please check your input"
 SERVER_ERROR = "Error: We are unable to get the distance at the moment"
+DISTANCE_NOT_FOUND_ERROR = "Error: Unable to find the distance between the two locations"
 
 app = Flask(__name__)
+
+
+class DistanceNotFoundException(Exception):
+    """Raised when the distance was not found"""
+    pass
+
+class InvalidInputException(Exception):
+    """Raised when the input value is too small"""
+    pass
 
 
 @app.route('/')
@@ -47,7 +57,8 @@ def add_data_db(db, locations, distance_between_cities, total_hits):
     db.locations.insert_one(
         {"locations": locations, "distance": distance_between_cities, "hits": total_hits},
     )
-    update_max_selects_collection(db, total_hits)
+    if total_hits > 1 or (total_hits == 1 and db.maxRequests.count_documents == 0):
+        update_max_selects_collection(db, total_hits)
 
 
 def check_if_data_exists(client, locations):
@@ -70,8 +81,8 @@ def get_distance_with_google_maps(source, destination):
             if "distance" in json_data["rows"][0]["elements"][0]:
                 return json_data["rows"][0]["elements"][0]["distance"]["value"]
             else:
-                Exception(INVALID_INPUT_ERROR)
-    Exception(SERVER_ERROR)
+                raise DistanceNotFoundException
+    raise InvalidInputException
 
 
 def get_location_string(source, destination):
@@ -113,10 +124,10 @@ def distance_getter():
                         status=200,
                         mimetype='application/json')
     # these are internet thrown exception thus the search failed
-    except INVALID_INPUT_ERROR:
+    except InvalidInputException:
         return Response(INVALID_INPUT_ERROR, status=420)
-    except SERVER_ERROR:
-        return Response(SERVER_ERROR, status=430)
+    except DistanceNotFoundException:
+        return Response(DISTANCE_NOT_FOUND_ERROR, status=430)
     except requests.exceptions.RequestException:
         return Response(SERVER_ERROR, status=430)
 
