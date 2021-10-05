@@ -22,6 +22,7 @@ class DistanceNotFoundException(Exception):
     """Raised when the distance was not found"""
     pass
 
+
 class InvalidInputException(Exception):
     """Raised when the input value is too small"""
     pass
@@ -75,14 +76,17 @@ def get_distance_with_google_maps(source, destination):
     headers = {}
 
     response = requests.request("GET", url, headers=headers, data=payload)
-    if response.ok:
-        json_data = json.loads(response.text)
-        if json_data["status"] == 'OK':
-            if "distance" in json_data["rows"][0]["elements"][0]:
-                return json_data["rows"][0]["elements"][0]["distance"]["value"]
-            else:
-                raise DistanceNotFoundException
-    raise InvalidInputException
+    try:
+        if response.ok:
+            json_data = json.loads(response.text)
+            if json_data["status"] == 'OK':
+                if "distance" in json_data["rows"][0]["elements"][0]:
+                    return json_data["rows"][0]["elements"][0]["distance"]["value"]
+                else:
+                    raise DistanceNotFoundException
+        raise InvalidInputException
+    except IndexError:
+        raise DistanceNotFoundException
 
 
 def get_location_string(source, destination):
