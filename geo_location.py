@@ -8,6 +8,12 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from geopy.geocoders import Nominatim
 from geopy import distance
 
+TIMED_OUT_ERROR = "Error: Server timed out"
+NO_CONNECTION_ERROR = "Error: Unable to connect to our server at the moment"
+NO_SEARCHES_FOUND_ERROR = "Error: No searches found"
+INVALID_INPUT_ERROR = "Error: Cannot locate the locations requested please check your input"
+SERVER_ERROR = "Error: We are unable to get the distance at the moment"
+
 app = Flask(__name__)
 
 
@@ -15,14 +21,6 @@ app = Flask(__name__)
 @app.route('/hello')
 def hello_world():
     return Response(status=200)
-
-
-def is_server_connected(client):
-    try:
-        client.admin.command('ismaster')
-        return True
-    except ConnectionFailure:
-        return False
 
 
 def get_distance_with_packages(source, destination):
@@ -35,53 +33,138 @@ def get_distance_with_packages(source, destination):
                              (location_2.latitude, location_2.longitude)).km
 
 
-def update_max_selects_collection(db, total_requests):
-    max_requests_document = db.maxRequests.find()
-    max_requests = next(max_requests_document, None)
-    if max_requests:
-        if max_requests['requests'] < total_requests:
-            db.maxRequests.update_one({"_id": max_requests["_id"]}, {"$set": {"requests": total_requests}})
+def update_max_selects_collection(db, total_hits):
+    max_hits_document = db.maxRequests.find()
+    max_hits = next(max_hits_document, None)
+    if max_hits:
+        if max_hits['hits'] < total_hits:
+            db.maxRequests.update_one({"_id": max_hits["_id"]}, {"$set": {"hits": total_hits}})
     else:
-        db.maxRequests.insert_one({"requests": total_requests})
+        db.maxRequests.insert_one({"hits": total_hits})
 
 
-@app.route('/distance')
-def get_distance():
+def add_data_db(db, locations, distance_between_cities, total_hits):
+    db.locations.insert_one(
+        {"locations": locations, "distance": distance_between_cities, "hits": total_hits},
+    )
+    update_max_selects_collection(db, total_hits)
+
+
+def check_if_data_exists(client, locations):
+    db = client.homeProjects
+    distance_returned = db.locations.find({"locations": locations}, {"distance": 1, "hits": 1}).limit(1)
+    distance_object = next(distance_returned, None)
+    return distance_object
+
+
+def get_distance_with_google_maps(source, destination):
+    url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=AIzaSyDGvN2RbPJ1c-13CGv3DDruF7MVx5wECNo" % (
+        source, destination)
+    payload = {}
+    headers = {}
+
+    response = requests.request("GET", url, headers=headers, data=payload)
+    if response.ok:
+        json_data = json.loads(response.text)
+        if json_data["status"] == 'OK':
+            if "distance" in json_data["rows"][0]["elements"][0]:
+                return json_data["rows"][0]["elements"][0]["distance"]["value"]
+            else:
+                Exception(INVALID_INPUT_ERROR)
+    Exception(SERVER_ERROR)
+
+
+def get_location_string(source, destination):
+    if source > destination:
+        return source + "/" + destination
+    else:
+        return destination + "/" + source
+
+
+def distance_getter():
     source = request.args.get('source')
     destination = request.args.get('destination')
-    if source > destination:
-        locations = source + "/" + destination
-    else:
-        locations = destination + "/" + source
+    location_string = get_location_string(source, destination)
     client = MongoClient('localhost', 27017)
-    if is_server_connected(client):
-        db = client.homeProjects
-        distance_returned = db.locations.find({"locations": locations}, {"distance": 1, "requests": 1}).limit(1)
-        distance_object = next(distance_returned, None)
-        if distance_object:
-            total_requests = distance_object["requests"] + 1
-            update_max_selects_collection(db, total_requests)
-            db.locations.update_one({"locations": locations}, {"$set": {"requests": total_requests}})
-            return Response(response=json.dumps({"distance": str(distance_object["distance"])}), status=200,
-                            mimetype='application/json')
     try:
-        distance_between_cities = get_distance_with_packages(source, destination)
+        db = client.homeProjects
+        existing_query = check_if_data_exists(client, location_string)
+        if existing_query:
+            total_hits = existing_query["hits"] + 1
+            update_max_selects_collection(db, total_hits)
+            db.locations.update_one({"locations": location_string}, {"$set": {"hits": total_hits}})
+            return Response(response=json.dumps({"distance": str(existing_query["distance"])}), status=200,
+                            mimetype='application/json')
+    except ConnectionFailure:
+        pass
+    except ServerSelectionTimeoutError:
+        pass
+    try:
+        distance_between_cities = get_distance_with_google_maps(source, destination) / 1000
         if distance_between_cities is None:
-            return Response("Error: Cannot locate the locations requested please check your input", status=400)
+            return Response(INVALID_INPUT_ERROR, status=400)
         try:
-            db = client.homeProjects
-            db.locations.insert_one(
-                {"locations": locations, "distance": distance_between_cities, "requests": 1},
-            )
-            update_max_selects_collection(db, 1)
+            add_data_db(client.homeProjects, location_string, distance_between_cities, 1)
         except ServerSelectionTimeoutError as err:
+            pass
+        except ConnectionFailure:
             pass
         return Response(response=json.dumps({"distance": distance_between_cities}),
                         status=200,
                         mimetype='application/json')
+    # these are internet thrown exception thus the search failed
+    except INVALID_INPUT_ERROR:
+        return Response(INVALID_INPUT_ERROR, status=420)
+    except SERVER_ERROR:
+        return Response(SERVER_ERROR, status=430)
+    except requests.exceptions.RequestException:
+        return Response(SERVER_ERROR, status=430)
 
-    except ConnectionError:
-        return Response("Error: Unable to connect to our server at the moment", status=410)
+
+def post_distance():
+    client = MongoClient('localhost', 27017)
+    try:
+        request_data = request.json
+        source = request_data["source"]
+        destination = request_data["destination"]
+        location_string = get_location_string(source, destination)
+        distance_between_cities = request_data["distance"]
+        db = client.homeProjects
+        try:
+            existing_query = check_if_data_exists(client, location_string)
+            if existing_query:
+                db.locations.update_one({"locations": location_string}, {"$set": {"distance": distance_between_cities}})
+                return Response(
+                    response=json.dumps(
+                        {"source": source, "destination": destination, "hits": existing_query["hits"]}), status=201,
+                    mimetype='application/json')
+            else:
+                add_data_db(client.homeProjects, location_string, distance_between_cities, 0)
+                return Response(
+                    response=json.dumps(
+                        {"source": source, "destination": destination, "hits": 0}), status=201,
+                    mimetype='application/json')
+        except ServerSelectionTimeoutError:
+            return Response(TIMED_OUT_ERROR, status=410)
+
+    except ConnectionFailure:
+        return Response(NO_CONNECTION_ERROR, status=500)
+
+
+@app.route('/distance', methods=['GET', 'POST'])
+def get_distance():
+    if request.method == 'POST':
+        return post_distance()
+    else:
+        return distance_getter()
+
+
+def is_server_connected(client):
+    try:
+        client.admin.command('ismaster')
+        return True
+    except ConnectionFailure:
+        return False
 
 
 @app.route('/health')
@@ -90,30 +173,31 @@ def get_health():
     if is_server_connected(client):
         return Response(status=200)
     else:
-        return Response("Error: Unable to connect to our server at the moment", status=500)
+        return Response(NO_CONNECTION_ERROR, status=500)
 
 
 @app.route('/popularsearch')
 def get_popular_search():
     client = MongoClient('localhost', 27017)
-    if is_server_connected(client):
+    try:
         db = client.homeProjects
-        max_requests_document = db.maxRequests.find()
-        max_requests = next(max_requests_document, None)
-        if max_requests:
-            most_searched_query_cursor = db.locations.find({"requests": max_requests["requests"]}).limit(1)
+        max_hits_document = db.maxRequests.find()
+        max_hits = next(max_hits_document, None)
+        if max_hits:
+            most_searched_query_cursor = db.locations.find({"hits": max_hits["hits"]}).limit(1)
             most_searched_query_object = next(most_searched_query_cursor, None)
             if most_searched_query_object:
                 source, destination = most_searched_query_object["locations"].split('/')[0], \
                                       most_searched_query_object["locations"].split('/')[1]
                 return Response(
                     response=json.dumps(
-                        {"source": source, "destination": destination, "hits": most_searched_query_object["requests"]}),
+                        {"source": source, "destination": destination, "hits": most_searched_query_object["hits"]}),
                     status=200, mimetype='application/json')
         return Response(
-            "Error: No searches found", status=300)
-    else:
-        return Response("Error: Unable to connect to our server at the moment", status=500)
+            NO_SEARCHES_FOUND_ERROR, status=300)
+    except ConnectionFailure:
+        return Response(
+            NO_CONNECTION_ERROR, status=500)
 
 
 if __name__ == '__main__':
