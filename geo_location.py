@@ -98,7 +98,7 @@ def distance_getter():
             total_hits = existing_query["hits"] + 1
             update_max_selects_collection(db, total_hits)
             db.locations.update_one({"locations": location_string}, {"$set": {"hits": total_hits}})
-            return Response(response=json.dumps({"distance": str(existing_query["distance"])}), status=200,
+            return Response(response=json.dumps({"distance": existing_query["distance"]}), status=200,
                             mimetype='application/json')
     except ConnectionFailure:
         pass
@@ -110,7 +110,7 @@ def distance_getter():
             return Response(INVALID_INPUT_ERROR, status=400)
         try:
             add_data_db(client.homeProjects, location_string, distance_between_cities, 1)
-        except ServerSelectionTimeoutError as err:
+        except ServerSelectionTimeoutError:
             pass
         except ConnectionFailure:
             pass
@@ -207,5 +207,4 @@ def get_popular_search():
 
 
 if __name__ == '__main__':
-    app.debug = True
     app.run(host='0.0.0.0', port=8080)
