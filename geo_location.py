@@ -34,16 +34,6 @@ def hello_world():
     return Response(status=200)
 
 
-def get_distance_with_packages(source, destination):
-    geolocator = Nominatim(user_agent="Your_Name")
-    location_1 = geolocator.geocode(source)
-    location_2 = geolocator.geocode(destination)
-    if location_1 is None or location_2 is None:
-        return None
-    return distance.distance((location_1.latitude, location_1.longitude),
-                             (location_2.latitude, location_2.longitude)).km
-
-
 def update_max_selects_collection(db, total_hits):
     max_hits_document = db.maxRequests.find()
     max_hits = next(max_hits_document, None)
@@ -70,7 +60,7 @@ def check_if_data_exists(client, locations):
 
 
 def get_distance_with_google_maps(source, destination):
-    url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=" % (
+    url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=%s&destinations=%s&key=AIzaSyDGvN2RbPJ1c-13CGv3DDruF7MVx5wECNo" % (
         source, destination)
     payload = {}
     headers = {}
@@ -145,23 +135,21 @@ def post_distance():
         location_string = get_location_string(source, destination)
         distance_between_cities = request_data["distance"]
         db = client.homeProjects
-        try:
-            existing_query = check_if_data_exists(client, location_string)
-            if existing_query:
-                db.locations.update_one({"locations": location_string}, {"$set": {"distance": distance_between_cities}})
-                return Response(
-                    response=json.dumps(
-                        {"source": source, "destination": destination, "hits": existing_query["hits"]}), status=201,
-                    mimetype='application/json')
-            else:
-                add_data_db(client.homeProjects, location_string, distance_between_cities, 0)
-                return Response(
-                    response=json.dumps(
-                        {"source": source, "destination": destination, "hits": 0}), status=201,
-                    mimetype='application/json')
-        except ServerSelectionTimeoutError:
-            return Response(TIMED_OUT_ERROR, status=410)
-
+        existing_query = check_if_data_exists(client, location_string)
+        if existing_query:
+            db.locations.update_one({"locations": location_string}, {"$set": {"distance": distance_between_cities}})
+            return Response(
+                response=json.dumps(
+                    {"source": source, "destination": destination, "hits": existing_query["hits"]}), status=201,
+                mimetype='application/json')
+        else:
+            add_data_db(client.homeProjects, location_string, distance_between_cities, 0)
+            return Response(
+                response=json.dumps(
+                    {"source": source, "destination": destination, "hits": 0}), status=201,
+                mimetype='application/json')
+    except ServerSelectionTimeoutError:
+        return Response(TIMED_OUT_ERROR, status=410)
     except ConnectionFailure:
         return Response(NO_CONNECTION_ERROR, status=500)
 
@@ -210,6 +198,9 @@ def get_popular_search():
                     status=200, mimetype='application/json')
         return Response(
             NO_SEARCHES_FOUND_ERROR, status=300)
+    except ServerSelectionTimeoutError:
+        return Response(
+            TIMED_OUT_ERROR, status=300)
     except ConnectionFailure:
         return Response(
             NO_CONNECTION_ERROR, status=500)
